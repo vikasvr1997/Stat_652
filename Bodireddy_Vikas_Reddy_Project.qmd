@@ -1,0 +1,36 @@
+---
+title: "Project-652"
+author: "Vikas Reddy Bodireddy"
+format: 
+    html:
+      self-contained: true
+editor: visual
+---
+
+## Quarto
+
+```{r, warning=FALSE, message=FALSE}
+library(tidymodels)  
+
+# Helper packages
+library(readr)       # for importing data
+library(vip)         # for variable importance plots
+library(tidymodels)
+library(readr)
+
+hotels <- 
+  read_csv("https://tidymodels.org/start/case-study/hotels.csv") %>%
+  mutate(across(where(is.character), as.factor))
+
+dim(hotels)
+
+```
+
+```{r}
+glimpse(hotels)
+
+```
+
+```{r}
+
+```
