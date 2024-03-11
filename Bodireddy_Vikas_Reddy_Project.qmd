@@ -32,5 +32,257 @@ glimpse(hotels)
 ```
 
 ```{r}
+hotels %>% 
+  count(children) %>% 
+  mutate(prop = n/sum(n))
+```
+
+## DATA SPLITTING & RESAMPLING
+
+```{r}
+set.seed(123)
+splits      <- initial_split(hotels, strata = children)
+
+hotel_other <- training(splits)
+hotel_test  <- testing(splits)
+
+# training set proportions by children
+hotel_other %>% 
+  count(children) %>% 
+  mutate(prop = n/sum(n))
+
+hotel_test  %>% 
+  count(children) %>% 
+  mutate(prop = n/sum(n))
+```
+
+```{r, warning=FALSE,message=FALSE}
+set.seed(234)
+val_set <- validation_split(hotel_other, 
+                            strata = children, 
+                            prop = 0.80)
+val_set
+```
+
+1.  **Build the PENALIZED LOGISTIC REGRESSION model the hotel data. In this case study, explain how the *recipe*and *workflow* functions are used to prepare the data for the model. Also, explain how the *tune_grid* is used.**
+
+    ### Biuld the model
+
+    ```{r}
+    lr_mod <- 
+      logistic_reg(penalty = tune(), mixture = 1) %>% 
+      set_engine("glmnet")
+
+    ```
+
+    ```{r}
+    holidays <- c("AllSouls", "AshWednesday", "ChristmasEve", "Easter", 
+                  "ChristmasDay", "GoodFriday", "NewYearsDay", "PalmSunday")
+
+    lr_recipe <- 
+      recipe(children ~ ., data = hotel_other) %>% 
+      step_date(arrival_date) %>% 
+      step_holiday(arrival_date, holidays = holidays) %>% 
+      step_rm(arrival_date) %>% 
+      step_dummy(all_nominal_predictors()) %>% 
+      step_zv(all_predictors()) %>% 
+      step_normalize(all_predictors())
+    ```
+
+    Creating workflow
+
+    ```{r}
+    lr_workflow <- 
+      workflow() %>% 
+      add_model(lr_mod) %>% 
+      add_recipe(lr_recipe)
+    ```
+
+    Creating grid for tuning
+
+    ```{r, warning=FALSE, message=FALSE}
+    lr_reg_grid <- tibble(penalty = 10^seq(-4, -1, length.out = 30))
+
+    lr_reg_grid %>% top_n(-5)
+    lr_reg_grid %>% top_n(5)
+    ```
+
+    Train Tune the model
+
+    ```{r}
+    lr_res <- 
+      lr_workflow %>% 
+      tune_grid(val_set,
+                grid = lr_reg_grid,
+                control = control_grid(save_pred = TRUE),
+                metrics = metric_set(roc_auc))
+    ```
+
+    ```{r}
+    lr_plot <- 
+      lr_res %>% 
+      collect_metrics() %>% 
+      ggplot(aes(x = penalty, y = mean)) + 
+      geom_point() + 
+      geom_line() + 
+      ylab("Area under the ROC Curve") +
+      scale_x_log10(labels = scales::label_number())
+
+    lr_plot 
+    ```
+
+    ```{r}
+    top_models <-
+      lr_res %>% 
+      show_best("roc_auc", n = 15) %>% 
+      arrange(penalty) 
+    top_models
+
+    ```
+
+    ```{r}
+    lr_best <- 
+      lr_res %>% 
+      collect_metrics() %>% 
+      arrange(penalty) %>% 
+      slice(12)
+    lr_best
+
+    lr_auc <- 
+      lr_res %>% 
+      collect_predictions(parameters = lr_best) %>% 
+      roc_curve(children, .pred_children) %>% 
+      mutate(model = "Logistic Regression")
+
+    autoplot(lr_auc)
+    ```
+
+    #### **Answer:**
+
+    **Data Preparation with Recipes and Workflows:** In the recipe function, two essential arguments are employed: the formula (Children \~.) which encompasses all predictors for hotel bookings with children, and the dataset, in this case, the training data - hotel_other. The recipe function comprises steps that create appropriate columns for the predictors. For instance, step_date creates suitable columns for the predictor arrival_date, step_holiday generates a binary column to predict holidays, step_rm removes variables unnecessary for our model, step_dummy() converts factor columns to numeric binary columns, step_zv removes variables containing 0, and lastly, as we're building a penalized logistic regression model, our variables must be normalized, hence the use of step_normalize function. After creating the recipe, the workflow function is utilized to pair the recipe to the model we aim to build - in this case, the penalized logistic regression model, storing it into a single object. Here, the workflow function is defined, and then the model (lr_mod) is specified in the add_model function, followed by applying the recipe we created (lr_recipe) in the add_recipe function.
+
+    **Utilization of Tuning Grid:** The optimization of hyperparameters for the logistic regression model is conducted using the tune_grid() function. A grid of hyperparameters is specified via the grid argument, encompassing a range of penalties for the regularization term. The evaluation metric used to determine the accuracy of the model, in this case, is the ROC curve. The tuning process is carried out on the validation set (val_set), with the selection of the best model based on performance metrics.
+
+    **Model Construction:** For model construction, the logistic regression model is instantiated using the logistic_reg() function from the parsnip package. The penalty parameter is set to tune(), indicating hyperparameter optimization during training. Sole utilization of L2 regularization (ridge regression) is specified (mixture = 1), with the model engine defined as "glmnet". Hyperparameters for tuning are defined within lr_reg_grid, encompassing a spectrum of penalty values for logistic regression with penalization. Model training is executed through the workflow (lr_workflow) and tuning grid (lr_reg_grid). The tune_grid() function conducts tuning via cross-validation on the validation set (val_set), with model performance assessed based on the area under the ROC curve.
+
+    **Selection of Top Models:** Post-tuning, the top-performing models are identified based on the area under the ROC curve. The show_best() function facilitates the selection of the best models, with the top 15 models displayed alongside their corresponding penalty values. The best model is ultimately chosen based on a specific penalty value (lr_best), and model performance is evaluated through ROC curve analysis.
+
+    In summary, the author effectively employs the tidymodels framework in R to preprocess data, construct logistic regression models with penalization, fine-tune hyperparameters, and assess model performance for hotel booking prediction.
+
+### 2. Build the TREE-BASED ENSEMBLE model the hotel data.
+
+\`\`\`\`\
+\### Building a Tree Based Ensemble model
+
+```{r}
+cores <- parallel::detectCores()
+cores
 
 ```
+
+```{r}
+rf_mod <- 
+  rand_forest(mtry = tune(), min_n = tune(), trees = 1000) %>% 
+  set_engine("ranger", num.threads = cores) %>% 
+  set_mode("classification")
+```
+
+Create recipes
+
+```{r}
+rf_recipe <- 
+  recipe(children ~ ., data = hotel_other) %>% 
+  step_date(arrival_date) %>% 
+  step_holiday(arrival_date) %>% 
+  step_rm(arrival_date) 
+```
+
+```{r}
+rf_workflow <- 
+  workflow() %>% 
+  add_model(rf_mod) %>% 
+  add_recipe(rf_recipe)
+```
+
+```{r}
+rf_mod
+extract_parameter_set_dials(rf_mod)
+```
+
+```{r}
+set.seed(345)
+rf_res <- 
+  rf_workflow %>% 
+  tune_grid(val_set,
+            grid = 25,
+            control = control_grid(save_pred = TRUE),
+            metrics = metric_set(roc_auc))
+rf_res %>% 
+  show_best(metric = "roc_auc")
+autoplot(rf_res)
+```
+
+```{r}
+rf_best <- 
+  rf_res %>% 
+  select_best(metric = "roc_auc")
+rf_best
+```
+
+```{r}
+rf_res %>% 
+  collect_predictions()
+```
+
+```{r}
+rf_auc <- 
+  rf_res %>% 
+  collect_predictions(parameters = rf_best) %>% 
+  roc_curve(children, .pred_children) %>% 
+  mutate(model = "Random Forest")
+```
+
+```{r}
+bind_rows(rf_auc, lr_auc) %>% 
+  ggplot(aes(x = 1 - specificity, y = sensitivity, col = model)) + 
+  geom_path(lwd = 1.5, alpha = 0.8) +
+  geom_abline(lty = 3) + 
+  coord_equal() + 
+  scale_color_viridis_d(option = "plasma", end = .6)
+```
+
+```{r}
+last_rf_mod <- 
+  rand_forest(mtry = 8, min_n = 7, trees = 1000) %>% 
+  set_engine("ranger", num.threads = cores, importance = "impurity") %>% 
+  set_mode("classification")
+
+# the last workflow
+last_rf_workflow <- 
+  rf_workflow %>% 
+  update_model(last_rf_mod)
+
+# the last fit
+set.seed(345)
+last_rf_fit <- 
+  last_rf_workflow %>% 
+  last_fit(splits)
+
+last_rf_fit
+```
+
+```{r}
+last_rf_fit %>% 
+  collect_metrics()
+last_rf_fit %>% 
+  extract_fit_parsnip() %>% 
+  vip(num_features = 20)
+last_rf_fit %>% 
+  collect_predictions() %>% 
+  roc_curve(children, .pred_children) %>% 
+  autoplot()
+```
+
+### 3. Compare the ROC Curve for the two models and explain which model is better for classifying a hotel booking as with children or no children.
+
+**ANS:** Upon examining the ROC curves of both models, it becomes apparent that the tree-based ensemble exhibits superior performance compared to the penalized logistic regression model. Specifically, the ROC curve for the tree-based ensemble indicates a value of approximately 0.94, whereas for the penalized logistic regression model, it hovers around 0.874.
